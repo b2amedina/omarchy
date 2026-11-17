@@ -333,7 +333,7 @@ record = cursor()
 period_requests = [request for request in cursor.requests if request["url"].endswith("GetCurrentPeriodUsage")]
 sent = json.loads(period_requests[0]["data"])
 expect("a personal editor login is never asked about the CLI's team",
-       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, None], record)
+       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, True], record)
 expect("the personal editor's own plan meters read instead",
        [limit["label"] for limit in record["limits"]], ["Included total", "Auto models", "Named models", "On-demand $9.51 / $10.00"], record)
 
@@ -361,7 +361,7 @@ record = cursor(CURSOR_AUTH_TOKEN=jwt({"sub": "exported", "exp": time.time() + 3
 period_requests = [request for request in cursor.requests if request["url"].endswith("GetCurrentPeriodUsage")]
 sent = json.loads(period_requests[0]["data"])
 expect("an exported bearer of another account is never asked about the CLI's team",
-       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, None], record)
+       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, True], record)
 
 sandbox()
 cli_signed_in()
@@ -371,7 +371,23 @@ record = cursor(CURSOR_AUTH_PATH=str(config_home() / "cursor" / "moved-auth.json
 period_requests = [request for request in cursor.requests if request["url"].endswith("GetCurrentPeriodUsage")]
 sent = json.loads(period_requests[0]["data"])
 expect("a moved auth path of another account is never asked about the CLI's team",
-       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, None], record)
+       [len(period_requests), sent.get("team_id"), sent.get("include_pooled_usage")], [1, None, True], record)
+
+# An Enterprise account signed in only through the editor has no CLI config and
+# so no team id, yet the dashboard answers the pooled reading without one.
+sandbox()
+cursor_state_db(None, jwt({"sub": "ent-editor", "exp": time.time() + 3600}))
+
+
+def period_by_request(request):
+  if json.loads(request.data).get("include_pooled_usage"):
+    return {"billingCycleEnd": "4092099926000", "spendLimitUsage": {"overallLimit": "50000", "overallUsed": "14854"}}
+  return {"billingCycleEnd": "4092099926000"}
+
+
+record = cursor(routes=dict(ROUTES, **{RPC + "GetCurrentPeriodUsage": period_by_request}))
+expect("an editor-only Enterprise sign-in still gets the team's included meter",
+       [[limit["label"], limit["title"], round(limit["percent"] * 10000)] for limit in record["limits"]], [["Included usage", "Monthly", 2971]], record)
 
 # Untrusted numbers never break the record.
 expect("untrusted numbers read as nothing",
